@@ -1,0 +1,180 @@
+import xlrd
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA, KernelPCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+import seaborn as sns
+
+
+def get_tarnslate_dict(filename='Sheet2.xlsx'):
+    # 列名翻译
+    translate_dict = {}
+    # 打开翻译表
+    translate_table = xlrd.open_workbook(filename).sheet_by_index(0)
+    # 装到字典里
+    for i in range(translate_table.ncols):  # 每列的
+        kv = translate_table.col_values(i)  # 所有值里
+        translate_dict[kv[0]] = kv[1]  # 第0个是中文（键）第一个是英文（值）
+    return translate_dict
+
+
+def get_ordered_data(filename='AST all.xlsx'):
+    # better way. use pandas.
+    # 把代码和excel放在同一个文件夹里 ‘example.xlsx’是文件名
+    dataF = pd.read_excel(filename)  # 如果第一行直接就是数据不是列名就加上header=None
+
+    dataF.drop(columns=['CK'], inplace=True)  # LDH里面没东西 画不出来
+
+    # 列排序 dataFrame自己没有 我决定用dict做 还要记录“第一列”排序后的位置
+    d_names = dataF.columns.values.tolist()  # 获取列名
+    tag_name = d_names[0]  # 第一个是对照值
+    d_median = dataF.quantile([0.5]).values.tolist()[0]  # 拿到中位数 因为dataframe.tolist()是个二维数组所以[0]拿第一个
+    dictionary = dict(zip(d_names, d_median))  # 两个list拼成一个dict
+    sorted_dict = dict(sorted(dictionary.items(), key=lambda kv: (kv[1], kv[0])))  # 网上抄来的按dict.value排序
+    sorted_names = list(sorted_dict.keys())  # 把dict.keys转换成list
+    tag_index = sorted_names.index(tag_name)  # 找到新的列表里对照那一列在哪
+    dataF = dataF[sorted_names]  # 列重新排序
+    return dataF, tag_index
+
+def build_boxplot(dataF, tag_index, delete_fliers=False):
+    # 造palette
+    rb_palette = ['b']*(dataF.shape[1]-1)  # length-1 的蓝色
+    rb_palette.insert(tag_index, 'r')  # 把红色放到位置上
+
+    # 删离群点
+    # 用默认箱图找离群点 改成True就可以删掉离群点
+    # delete_fliers = False
+    if delete_fliers:
+        boxDict = dataF.boxplot(return_type='dict')
+        plt.show()  # 没用的图
+        for index, col_name in enumerate(dataF.columns):
+            # 获取异常值
+            fliers_value_list = boxDict['fliers'][index].get_ydata()
+            # 删除异常值
+            # dataF = dataF.drop(dataF[dataF[col_name].isin(fliers_value_list)])
+            # dataF = dataF[(~dataF[col_name].isin(fliers_value_list))]
+            for i in range(dataF.shape[0]):
+                if np.isnan(dataF.iloc[i,index]):
+                    break
+                if dataF.iloc[i,index] in fliers_value_list:
+                    dataF.iloc[i,index] = np.nan
+
+    # 做箱图
+    f, ax = plt.subplots(figsize=(10, 8))
+    boxFigure = sns.boxplot(data=dataF, whis=(0,100), palette=rb_palette, linewidth=0.7, ax=ax)
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=40, ha="right", fontsize=10)
+    #plt.yscale('symlog')
+    # 在对照列（Healthy Controls）画线
+    plt.axvline(x=tag_index, color='red', linestyle='--', linewidth=0.5)
+    # 一堆圈圈那个是被默认成离群点了 用whis=(0,100)把上下界指定成0%和100%就好了
+
+    plt.savefig('./img/box_' + '.svg')
+    f.show()
+
+    return dataF
+
+
+def get_category_list(d_names, filename='Disease classification 05162021.xlsx'):
+    # 读取分类表
+    category_df = pd.read_excel(filename)
+    category_list = []
+    for i in range(len(d_names)):
+        cat_res = category_df[category_df['Diseases'] == d_names[i]]['Category'].values
+        cat = 4  # others
+        if len(cat_res) != 0:
+            cat = cat_res[0]
+        category_list.append(cat)
+    return category_list
+
+
+def dim_reduce(dataF, tag_index, feature_choice=None, algorithm='PCA'):
+
+    if feature_choice is None:
+        feature_choice = [0, 0.16, 0.25, 0.5, 0.75, 0.84, 1]
+
+    d_quantiles = dataF.quantile(feature_choice)
+    pd.set_option('display.max_columns', None)
+    print(d_quantiles)
+
+    d_array = d_quantiles.to_numpy().T  # transpose 5*78 to 78*5
+
+    # 如果最后一列是对照(现在是行了) 应该在刚导入数据的时候就刨出去 像LDH一样
+    d_y = d_array[tag_index, :]  # 拿出来对照行
+    d_array = np.delete(d_array, tag_index, axis=0)  # 刨去对照行
+    d_names = dataF.columns.values.tolist()  # 获取列名
+    del d_names[tag_index]  # 删掉对照的列名
+
+    category_list = get_category_list(d_names)
+
+    # algorithm = 'kernel_PCA'
+    d_dim_reduced = None
+    if algorithm == 'PCA':
+        # 做pca
+        pca = PCA(n_components=2)  # 降到几维 现在这么写的是把5维降到2维
+        pca.fit(d_array)
+        print(pca.explained_variance_ratio_)
+        print(pca.components_)
+        d_dim_reduced = pca.transform(d_array)
+    elif algorithm == 'LDA':
+        # 做LDA
+        lda = LDA(n_components=2)
+        lda.fit(X=d_array, y=np.array(category_list))
+        d_dim_reduced = lda.transform(d_array)
+    elif algorithm == 'kernel_PCA':
+        # 做kernel PCA
+        kpca = KernelPCA(kernel="poly", degree=0.5, n_components=2)
+        X_kpca = kpca.fit_transform(d_array)
+        print(kpca.lambdas_)
+        d_dim_reduced = X_kpca
+
+    return d_dim_reduced, category_list, d_names
+
+
+def draw_dim_reduced_points(d_dim_reduced, category_list, d_names, delete_fliers, feature_choice):
+    # 改图大小
+    plt.figure(figsize=(12,12))
+    # 画点 c是颜色[x for x in range(len(d_pca[:, 0]))]
+    plt.scatter(d_dim_reduced[:, 0], d_dim_reduced[:, 1], c=category_list, edgecolor='none',
+                cmap=plt.cm.get_cmap('Spectral'), s=80)
+
+    # 用来在图上写标签
+    for i in range(len(d_dim_reduced[:, 0])):
+        plt.text(d_dim_reduced[i, 0] +0.01, d_dim_reduced[i, 1] * 1.01, d_names[i], fontsize=17)
+
+    # 横纵坐标的名字
+    plt.xlabel('component 1')
+    plt.ylabel('component 2')
+
+    # 画坐标轴
+    plt.axhline(y=0, color='black', linestyle='--', linewidth=0.5)
+    plt.axvline(x=0, color='black', linestyle='--', linewidth=0.5)
+
+    # 调整x和y轴是不是要用对数坐标轴 不用就注掉
+    #plt.yscale('symlog')
+    #plt.xscale('symlog')
+
+    # plt.colorbar()
+    filename_dataPart = 'part' if delete_fliers else 'alldata'
+    plt.savefig('./img/pca_' + filename_dataPart + str(feature_choice) + '.svg')
+    plt.show()
+
+    # roc 应该是拿pca以后的数据做二分类才能得到二分类
+    # accuracy sensitivity specificity 也是
+
+
+
+if __name__ == '__main__':
+
+    dataF, tag_index = get_ordered_data()
+    translate_dict = get_tarnslate_dict()
+    # 改列名
+    dataF.rename(columns=translate_dict, inplace=True)
+
+    delete_fliers = False
+    dataF = build_boxplot(dataF, tag_index, delete_fliers=delete_fliers)
+
+    feature_choice = [0, 0.25, 0.5, 0.75, 1]
+    d_dim_reduced, category_list, d_names = dim_reduce(dataF, tag_index,feature_choice=feature_choice)
+
+    draw_dim_reduced_points(d_dim_reduced, category_list, d_names, delete_fliers, feature_choice)
