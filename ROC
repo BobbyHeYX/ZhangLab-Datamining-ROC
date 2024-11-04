@@ -1,0 +1,166 @@
+import numpy as np
+import pandas as pd
+from sklearn.metrics import roc_curve, auc
+import matplotlib.pyplot as plt
+import seaborn as sns
+from dataMining import get_tarnslate_dict
+
+
+
+
+def draw_roc(filename='ASTROCALL.xlsx'):
+    # 读取数据
+    roc_dataF = pd.read_excel(filename)
+    translate_dict = get_tarnslate_dict()
+    # print(roc_dataF)
+    # 列名
+    d_names = roc_dataF.columns.values.tolist()
+    # 设置图片格式
+    fig = plt.figure(1, figsize=(22,25), dpi=300)
+
+    disease_name_list = []
+    statistics_list = []
+
+    figure_data_list = []  # 排序画图 用来存数据
+
+    for i in range(2, len(d_names), 3):                         # 从第2列开始 每3列是一组
+        disease_name_cn = d_names[i+1] + '95%'
+        disease_name_en = translate_dict[disease_name_cn]
+        disease_name_list.append(disease_name_en)
+        curr_disease_data = [[],[]]                             # 用来装数
+
+        score_col_0 = np.array(roc_dataF[d_names[i]])           # control column
+        nan_start = np.where(np.isnan(score_col_0))[0]          # 找找是不是有nan
+        if len(nan_start) > 0:                                  # 如果有
+            score_col_0 = score_col_0[0:nan_start[0]]           # 后面的nan都删掉 只留前面的数据
+        score_col_1 = np.array(roc_dataF[d_names[i+1]])         # real column
+        nan_start = np.where(np.isnan(score_col_1))[0]          # 找找是不是有nan
+        if len(nan_start) > 0:                                  # 如果有
+            score_col_1 = score_col_1[0:nan_start[0]]           # 后面的nan都删掉 只留前面的数据
+
+        label_col_0 = np.ndarray(score_col_0.shape)
+        label_col_1 = np.ndarray(score_col_1.shape)
+
+        label_col_0.fill(1)
+        label_col_1.fill(0)
+
+        curr_disease_data[0].extend(label_col_0.tolist())       # 装起来
+        curr_disease_data[0].extend(label_col_1.tolist())
+        curr_disease_data[1].extend(score_col_0.tolist())
+        curr_disease_data[1].extend(score_col_1.tolist())
+
+        # for label in range(2):                                  # 每一组中第0列正好是control label是0， 第1列label是1
+        #     score_col = np.array(roc_dataF[d_names[i+label]])   # 拿到这一列
+        #     nan_start = np.where(np.isnan(score_col))[0]        # 找找是不是有nan
+        #     if len(nan_start) > 0:                              # 如果有
+        #         score_col = score_col[0:nan_start[0]]           # 后面的nan都删掉 只留前面的数据
+        #     label_col = np.ndarray(score_col.shape)             # 做一个同样长的数组存label
+        #     label_col.fill(label)                               # 填充应该的label
+        #     curr_disease_data[0].extend(label_col.tolist())     # 装起来
+        #     curr_disease_data[1].extend(score_col.tolist())
+
+        fpr, tpr, thresholds = roc_curve(curr_disease_data[0], curr_disease_data[1])  # 调用roc
+        cur_auc = auc(fpr, tpr)
+
+        if cur_auc < 0.5:
+            curr_disease_data[0] = []
+            label_col_0.fill(0)
+            label_col_1.fill(1)
+            curr_disease_data[0].extend(label_col_0.tolist())  # 装起来
+            curr_disease_data[0].extend(label_col_1.tolist())
+            fpr, tpr, thresholds = roc_curve(curr_disease_data[0], curr_disease_data[1])  # 调用roc
+            cur_auc = auc(fpr, tpr)
+
+        youden = tpr - fpr                                                  # 计算youden
+        cut_point = np.argmax(youden)                                       # max youden->cutoff
+        sensitivity = tpr[cut_point]                                        # 后面是算各个统计值
+        specificity = 1 - fpr[cut_point]
+        threshold = thresholds[cut_point]
+        positive = sum(x >= threshold for x in curr_disease_data[1])
+        negetive = len(curr_disease_data[1]) - positive
+        accuracy = (positive * sensitivity + negetive * specificity) / len(curr_disease_data[1])
+
+        statistics_list.append([cur_auc, accuracy, sensitivity, specificity])
+
+        figure_data_list.append((disease_name_en, cur_auc, fpr, tpr, cut_point))  # 排序画图 把所有的存到一起
+
+    figure_data_list.sort(key=lambda x: -x[1])  # 排序画图 排序 按每条的第二个数据的逆序排序 （auc从大到小）
+
+    for i in range(len(figure_data_list)):  # 排序画图 新的循环
+
+        disease_name_en, cur_auc, fpr, tpr, cut_point = figure_data_list[i]  # 排序画图 取数
+
+        ax = fig.add_subplot(8, 6, 1+i)  # 8行9列的第几个图 后面是画图代码 (排序画图 因为写成单独的循环所以就不用(int)(i / 3))
+        fig.subplots_adjust(hspace=0.3)
+        lw = 1
+
+        max_youden_x = [fpr[cut_point], fpr[cut_point]]                     # max youden line
+        max_youden_y = [tpr[cut_point], fpr[cut_point]]
+        ax.plot(max_youden_x, max_youden_y, color='black', lw=lw)
+
+        ax.plot(fpr, tpr, color='darkorange',
+                 lw=lw)
+        ax.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
+        ax.set_xticks([])
+        ax.set_yticks([])
+        # plt.xlim([0.0, 1.0])
+        # plt.ylim([0.0, 1.05])
+        # ax.set_xlabel(, fontsize=8)
+        # plt.ylabel('True Positive Rate')
+        # plt.title((int)(i / 3))
+        ax.set_title(disease_name_en, fontsize=15)
+        ax.legend(['auc='+str(format(cur_auc, '.2f'))], loc="lower right", fontsize=13)
+
+    # plt.show()
+    plt.savefig('./img/roc.svg')
+    plt.close('all')
+
+    return disease_name_list, statistics_list
+
+
+def draw_heatmap(heatmap_df):
+
+    fig = plt.figure(1, figsize=(6,15), dpi=300)
+    plt.subplot(projection="polar")
+    fig.subplots_adjust(right=0.4)
+    ax = sns.heatmap(heatmap_df, cbar=False, cmap='Spectral_r', annot=True, fmt='.2f')  # 画图
+    ax.yaxis.set_label_position("right")  # 病名放右边
+    ax.yaxis.tick_right()
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)  # 不知道为什么非得设置一下不然会画成一坨
+    plt.show()
+    plt.savefig('./img/heatmap.svg')
+    plt.close()
+
+
+def transform_to_df(disease_name_list, statistics_list):
+    heatmap_df = pd.DataFrame(statistics_list)
+    heatmap_df.columns = ['AUC', 'Accuracy', 'Sensitivity', 'Specificity']  # 重命名行列 方便画图
+    heatmap_df.index = disease_name_list
+    print(heatmap_df)
+    heatmap_df = heatmap_df.sort_values(by="AUC", ascending=False)
+    return heatmap_df
+
+
+def draw_radialheatmap(heatmap_df):
+
+    # transform the df
+    df_list = []
+    diseases = heatmap_df.index.values.tolist()
+    items = heatmap_df.columns.values.tolist()
+
+    for i in range(len(diseases)):
+        for j in range(len(items)):
+            df_list.append([heatmap_df.iat[i, j], diseases[i], items[j]])
+    heatmap_df = pd.DataFrame(df_list)
+    heatmap_df.columns = ['values', 'diseases', 'items']
+
+
+
+
+if __name__ == '__main__':
+    disease_name_list, statistics_list = draw_roc()
+    heatmap_df = transform_to_df(disease_name_list, statistics_list)
+    # draw_heatmap(heatmap_df)
+    # heatmap_df = None
+    draw_radialheatmap(heatmap_df)
+    # hv.help(hv.HeatMap)
